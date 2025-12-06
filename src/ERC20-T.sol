@@ -12,6 +12,14 @@ contract MockERC20 {
 
     event Approval(address indexed owner, address indexed spender, uint256 amount);
 
+    event BalanceMultiplierUpdated(uint256 oldValue, uint256 newValue);
+
+    event TippingSentMultiplierUpdated(uint256 oldValue, uint256 newValue);
+
+    event TippingReceivedMultiplierUpdated(uint256 oldValue, uint256 newValue);
+
+    event DailyAllowanceUpdated(address indexed user, uint256 allowanceAdded);
+
     /*//////////////////////////////////////////////////////////////
                             METADATA STORAGE
     //////////////////////////////////////////////////////////////*/
@@ -33,6 +41,20 @@ contract MockERC20 {
     mapping(address => mapping(address => uint256)) public allowance;
 
     mapping(address => uint256) public tipAllowance;
+
+    // Daily allowance multiplier parameters
+    uint256 public balanceMultiplier = 1e18; // parameter1 (scaled by 1e18 for precision)
+    uint256 public tippingSentMultiplier = 1e18; // parameter2 (scaled by 1e18 for precision)
+    uint256 public tippingReceivedMultiplier = 1e18; // parameter3 (scaled by 1e18 for precision)
+
+    // Track total tips sent by each user
+    mapping(address => uint256) public totalTipsSent;
+
+    // Track total tips received by each user
+    mapping(address => uint256) public totalTipsReceived;
+
+    // Track last allowance update timestamp
+    mapping(address => uint256) public lastAllowanceUpdate;
 
     address public owner;
 
@@ -109,6 +131,12 @@ contract MockERC20 {
 
         if (tipAllowed != ~uint256(0)) tipAllowance[msg.sender] = _sub(tipAllowed, amount);
 
+        // Track total tips sent for daily allowance calculation
+        totalTipsSent[msg.sender] = _add(totalTipsSent[msg.sender], amount);
+
+        // Track total tips received for daily allowance calculation
+        totalTipsReceived[to] = _add(totalTipsReceived[to], amount);
+
         _mint(to, amount);
 
         return true;
@@ -120,6 +148,80 @@ contract MockERC20 {
 
         for (uint256 i = 0; i < tippers.length; i++) {
             tipAllowance[tippers[i]] = allowances_[i];
+        }
+
+        return true;
+    }
+
+    /// @notice Update the balance multiplier parameter (parameter1)
+    /// @dev Only owner can call this. Scaled by 1e18 (e.g., 1e18 = 1x, 2e18 = 2x, 5e17 = 0.5x)
+    function updateBalanceMultiplier(uint256 newMultiplier) public virtual returns (bool) {
+        require(msg.sender == owner, "UNAUTHORIZED");
+        uint256 oldValue = balanceMultiplier;
+        balanceMultiplier = newMultiplier;
+        emit BalanceMultiplierUpdated(oldValue, newMultiplier);
+        return true;
+    }
+
+    /// @notice Update the tipping sent multiplier parameter (parameter2)
+    /// @dev Only owner can call this. Scaled by 1e18 (e.g., 1e18 = 1x, 2e18 = 2x, 5e17 = 0.5x)
+    function updateTippingSentMultiplier(uint256 newMultiplier) public virtual returns (bool) {
+        require(msg.sender == owner, "UNAUTHORIZED");
+        uint256 oldValue = tippingSentMultiplier;
+        tippingSentMultiplier = newMultiplier;
+        emit TippingSentMultiplierUpdated(oldValue, newMultiplier);
+        return true;
+    }
+
+    /// @notice Update the tipping received multiplier parameter (parameter3)
+    /// @dev Only owner can call this. Scaled by 1e18 (e.g., 1e18 = 1x, 2e18 = 2x, 5e17 = 0.5x)
+    function updateTippingReceivedMultiplier(uint256 newMultiplier) public virtual returns (bool) {
+        require(msg.sender == owner, "UNAUTHORIZED");
+        uint256 oldValue = tippingReceivedMultiplier;
+        tippingReceivedMultiplier = newMultiplier;
+        emit TippingReceivedMultiplierUpdated(oldValue, newMultiplier);
+        return true;
+    }
+
+    /// @notice Calculate daily tip allowance increase for a user
+    /// @dev Formula: (balance * balanceMultiplier) + (totalTipsSent * tippingSentMultiplier) + (totalTipsReceived * tippingReceivedMultiplier)
+    /// @dev All multipliers are scaled by 1e18 for precision
+    function calculateDailyAllowance(address user) public view returns (uint256) {
+        uint256 balancePart = (balanceOf[user] * balanceMultiplier) / 1e18;
+        uint256 tippingSentPart = (totalTipsSent[user] * tippingSentMultiplier) / 1e18;
+        uint256 tippingReceivedPart = (totalTipsReceived[user] * tippingReceivedMultiplier) / 1e18;
+        return _add(_add(balancePart, tippingSentPart), tippingReceivedPart);
+    }
+
+    /// @notice Update daily tip allowance for a user (can be called once per day)
+    /// @dev Anyone can call this to update their own or someone else's allowance
+    function updateDailyAllowance(address user) public virtual returns (bool) {
+        require(block.timestamp >= lastAllowanceUpdate[user] + 1 days, "ALLOWANCE_ALREADY_UPDATED_TODAY");
+
+        uint256 allowanceIncrease = calculateDailyAllowance(user);
+
+        if (allowanceIncrease > 0) {
+            tipAllowance[user] = _add(tipAllowance[user], allowanceIncrease);
+            lastAllowanceUpdate[user] = block.timestamp;
+            emit DailyAllowanceUpdated(user, allowanceIncrease);
+        }
+
+        return true;
+    }
+
+    /// @notice Batch update daily allowances for multiple users
+    /// @dev Gas-efficient way to update many users at once
+    function batchUpdateDailyAllowances(address[] memory users) public virtual returns (bool) {
+        for (uint256 i = 0; i < users.length; i++) {
+            if (block.timestamp >= lastAllowanceUpdate[users[i]] + 1 days) {
+                uint256 allowanceIncrease = calculateDailyAllowance(users[i]);
+
+                if (allowanceIncrease > 0) {
+                    tipAllowance[users[i]] = _add(tipAllowance[users[i]], allowanceIncrease);
+                    lastAllowanceUpdate[users[i]] = block.timestamp;
+                    emit DailyAllowanceUpdated(users[i], allowanceIncrease);
+                }
+            }
         }
 
         return true;
