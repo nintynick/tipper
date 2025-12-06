@@ -58,6 +58,8 @@ contract MockERC20 {
 
     address public owner;
 
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
     /*//////////////////////////////////////////////////////////////
                             EIP-2612 STORAGE
     //////////////////////////////////////////////////////////////*/
@@ -224,6 +226,17 @@ contract MockERC20 {
             }
         }
 
+        return true;
+    }
+
+    /// @notice Transfer ownership to a new address
+    /// @dev Only owner can call this
+    function transferOwnership(address newOwner) public virtual returns (bool) {
+        require(msg.sender == owner, "UNAUTHORIZED");
+        require(newOwner != address(0), "INVALID_NEW_OWNER");
+        address previousOwner = owner;
+        owner = newOwner;
+        emit OwnershipTransferred(previousOwner, newOwner);
         return true;
     }
 
